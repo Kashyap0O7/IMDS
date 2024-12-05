@@ -49,6 +49,35 @@ int write_all(int fd, const char *buf, size_t n) {
     return 0;
 }
 
+int one_request(int connfd) {
+    // 4 bytes header
+    char rbuf[4 + k_max_msg];
+    errno = 0;
+    int32_t err = read_full(connfd, rbuf, 4);
+    if (err) {
+        msg(errno == 0 ? "EOF" : "read() error");
+        return err;
+    }
+
+    uint32_t len = 0;
+    memcpy(&len, rbuf, 4);  // assume little endian
+    if (len > k_max_msg) {
+        msg("too long");
+        return -1;
+    }
+
+    // request body
+    err = read_full(connfd, &rbuf[4], len);
+    if (err) {
+        msg("read() error");
+        return err;
+    }
+
+    // do something
+    fprintf(stderr, "client says: %.*s\n", len, &rbuf[4]);
+
+}
+
 int main() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -81,7 +110,7 @@ int main() {
         }
 
         while (true) {
-            int32_t err = read_full(connfd,buf,k_max_msg);
+            int32_t err = one_request(connfd);
             if (err) {
                 break;
             }
