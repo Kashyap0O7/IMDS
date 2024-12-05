@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,17 +20,20 @@ static void die(const char *msg) {
     abort();
 }
 
-static void do_something(int connfd) {
-    char rbuf[64] = {};
-    ssize_t n = read(connfd, rbuf, sizeof(rbuf) - 1);
-    if (n < 0) {
-        msg("read() error");
-        return;
-    }
-    fprintf(stderr, "client says: %s\n", rbuf);
+const size_t k_max_msg = 4096;
+char *buf[4+k_max_msg];
 
-    char wbuf[] = "world";
-    write(connfd, wbuf, strlen(wbuf));
+static int32_t read_full(int fd, char *buf, size_t n) {
+    while (n > 0) {
+        ssize_t rv = read(fd, buf, n);
+        if (rv <= 0) {
+            return -1;  // error, or unexpected EOF
+        }
+        assert((size_t)rv <= n);
+        n -= (size_t)rv;
+        buf += rv;
+    }
+    return 0;
 }
 
 int main() {
@@ -45,7 +49,7 @@ int main() {
     addr.sin_family = AF_INET;
     addr.sin_port = ntohs(1234);
     addr.sin_addr.s_addr = ntohl(0);    // wildcard address 0.0.0.0
-    int rv = bind(fd, (const struct sockaddr *)&addr, sizeof(addr));
+    int rv = bind(fd, (const sockaddr *)&addr, sizeof(addr));
     if (rv) {
         die("bind()");
     }
@@ -63,7 +67,12 @@ int main() {
             continue;   // error
         }
 
-        do_something(connfd);
+        while (true) {
+            int32_t err = read_full(connfd,buf,k_max_msg);
+            if (err) {
+                break;
+            }
+        }
         close(connfd);
     }
 
