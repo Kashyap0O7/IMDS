@@ -66,16 +66,20 @@ int one_request(int connfd) {
         return -1;
     }
 
-    // request body
     err = read_full(connfd, &rbuf[4], len);
     if (err) {
         msg("read() error");
         return err;
     }
 
-    // do something
     fprintf(stderr, "client says: %.*s\n", len, &rbuf[4]);
 
+    const char reply[] = "world";
+    char wbuf[4 + sizeof(reply)];
+    len = (int)strlen(reply);
+    memcpy(wbuf, &len, 4);
+    memcpy(wbuf[4], reply, len);
+    return write_all(connfd, wbuf, 4 + len);
 }
 
 int main() {
