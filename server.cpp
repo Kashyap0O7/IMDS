@@ -4,10 +4,16 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
+#include <vector>
+
+
+
 
 
 static void msg(const char *msg) {
@@ -21,6 +27,17 @@ static void die(const char *msg) {
 }
 
 const size_t k_max_msg = 4096;
+
+
+
+
+struct Conn {
+    int fd = -1;
+    bool want_read = false;
+    bool want_write = false;
+    std::vector<uint8_t> incoming;  
+    std::vector<uint8_t> outgoing; 
+};
 
 static int32_t read_full(int fd, char *buf, size_t n) {
     while (n > 0) {
@@ -125,14 +142,38 @@ int main() {
             continue;   // error
         }
 
+        std::vector<Conn *> fd2conn;
+        std::vector<struct pollfd> poll_args;
+        // the event loop
         while (true) {
-            // here the server only serves one client connection at once
-            int32_t err = one_request(connfd);
-            if (err) {
-                break;
+            poll_args.clear();
+            struct pollfd pfd = {fd, POLLIN, 0};
+            poll_args.push_back(pfd);
+            for (Conn *conn : fd2conn) {
+                if (!conn) {
+                    continue;
+                }
+                struct pollfd pfd = {conn->fd, POLLERR, 0};
+                if (conn->want_read) {
+                    pfd.events = POLLIN;
+                }
+                if (conn->want_write) {
+                    pfd.events = POLLOUT;
+                }
+                poll_args.push_back(pfd);
             }
-        }
-        close(connfd);
+
+            int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), -1);
+            if (rv < 0) {
+                die("poll");
+            }
+            
+
+
+
+
+
+        }   
     }
 
     return 0;
