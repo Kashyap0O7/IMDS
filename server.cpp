@@ -26,6 +26,23 @@ static void die(const char *msg) {
     abort();
 }
 
+static void fd_set_nb(int fd) {
+    errno = 0;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (errno) {
+        die("fcntl error");
+        return;
+    }
+
+    flags |= O_NONBLOCK;
+
+    errno = 0;
+    (void)fcntl(fd, F_SETFL, flags);
+    if (errno) {
+        die("fcntl error");
+    }
+}
+
 const size_t k_max_msg = 32 << 20;  
 
 struct Conn {
@@ -60,6 +77,8 @@ static Conn *handle_accept(int fd) {
         ntohs(client_addr.sin_port)
     );
 
+    fd_set_nb(connfd);
+
     Conn *conn = new Conn();
     conn->fd = connfd;
     conn->want_read = true;
@@ -83,7 +102,7 @@ static bool try_one_request(Conn *conn) {
     const uint8_t *request = &conn->incoming[4];
 
     printf("client says: len:%d data:%.*s\n",
-        len, len, request);
+        len, len < 100 ? len : 100, request);
 
     buf_append(conn->outgoing, (const uint8_t *)&len, 4);
     buf_append(conn->outgoing, request, len);
@@ -163,6 +182,7 @@ int main() {
     if (rv) {
         die("bind()");
     }
+    fd_set_nb(fd);
 
     // listen
     rv = listen(fd, SOMAXCONN);
