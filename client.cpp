@@ -130,19 +130,10 @@ int main(int argc, char **argv) {
     }
 
     std::vector<std::string> commands;
-    commands.push_back("set");
-        commands.push_back("Gentlemen");
-    commands.push_back("Gentlelady");
-
+    for (int i = 1; i < argc; ++i) {
+        commands.push_back(argv[i]);
+    }
     int32_t err = send_req(fd, commands);
-    if (err) {
-        goto L_DONE;
-    }
-    err = send_req(fd, commands);
-    if (err) {
-        goto L_DONE;
-    }
-    err = read_res(fd);
     if (err) {
         goto L_DONE;
     }
