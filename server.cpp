@@ -115,6 +115,7 @@ static int32_t deserialize(const uint8_t *data, size_t size, std::vector<std::st
         if (!read_int(data, end, len)) {
             return -1;
         }
+        out.push_back(std::string());
         if (!read_str(data, end, len, out.back())) {
             return -1;
         }
@@ -122,12 +123,46 @@ static int32_t deserialize(const uint8_t *data, size_t size, std::vector<std::st
     if (data != end) {
         return -1;
     }
+    return 0;
 }
 
+enum {
+    RESP_OK = 0,
+    RESP_ERR = 1,
+    RESP_NX = 2,
+};
 
+struct Response {
+    uint32_t status = 0;
+    std::vector<uint8_t> data;
+};
 
+static std::map<std::string, std::string> storage;
 
+static void cmd_execute(std::vector<std::string> &commands, Response &out) {
+    if (commands.size() == 2 && commands[0] == "get") {
+        auto it = storage.find(commands[1]);
+        if (it == storage.end()) {
+            out.status = RESP_NX;
+            return;
+        }
+        const std::string &val = it->second;
+        out.data.assign(val.begin(), val.end());
+    } else if (commands.size() == 3 && commands[0] == "set") {
+        storage[commands[1]].swap(commands[2]);
+    } else if (commands.size() == 2 && commands[0] == "del") {
+        storage.erase(commands[1]);
+    } else {
+        out.status = RESP_ERR;
+    }
+}
 
+static void gen_resp(const Response &resp, std::vector<uint8_t> &out) {
+    uint32_t resp_len = 4 + (uint32_t)resp.data.size();
+    buf_push_back(out,(const uint8_t *)&resp_len, 4);
+    buf_push_back(out,(const uint8_t *)&resp.status, 4);
+    buf_push_back(out,resp.data.data(), resp.data.size());
+}
 
 static bool pipeline_request(Conn *conn) {
     if (conn->incoming.size() < 4) {
