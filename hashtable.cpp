@@ -2,6 +2,20 @@
 #include <stdlib.h>
 #include "hashtable.hpp"
 
+static void h_init(HTab *htab, size_t n) {
+    assert(n > 0 && ((n - 1) & n) == 0);
+    htab->tab = (HNode **)calloc(n, sizeof(HNode *));
+    htab->mask = n - 1;
+    htab->size = 0;
+}
+
+static void h_insert(HTab *htab, HNode *node) {
+    size_t pos = node->hcode & htab->mask;
+    HNode *next = htab->tab[pos];
+    node->next = next;
+    htab->tab[pos] = node;
+    htab->size++;
+}
 
 static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
     if (!htab->tab) {
@@ -17,18 +31,9 @@ static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
     return NULL;
 }
 
-
-static void h_init(HTab *htab, size_t n) {
-    assert(n > 0 && ((n - 1) & n) == 0);
-    htab->tab = (HNode **)calloc(n, sizeof(HNode *));
-    htab->mask = n - 1;
-    htab->size = 0;
-}
-
-static void h_insert(HTab *htab, HNode *node) {
-    size_t pos = node->hcode & htab->mask;
-    HNode *next = htab->tab[pos];
-    node->next = next;
-    htab->tab[pos] = node;
-    htab->size++;
+static HNode *h_detach(HTab *htab, HNode **from) {
+    HNode *node = *from;
+    *from = node->next;
+    htab->size--;
+    return node;
 }
