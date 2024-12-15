@@ -19,3 +19,6 @@ struct HMap {
     HTab older;
     size_t migrate_pos = 0;
 };
+
+HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *));
+void   hm_insert(HMap *hmap, HNode *node);
