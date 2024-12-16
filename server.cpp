@@ -198,6 +198,16 @@ static void do_set(std::vector<std::string> &commands, Response &) {
     }
 }
 
+static void do_del(std::vector<std::string> &commands, Response &) {
+    Entry key;
+    key.key.swap(commands[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+    HNode *node = hm_delete(&data_store.db, &key.node, &entry_eq);
+    if (node) {
+        delete container_of(node, Entry, node);
+    }
+}
+
 static void cmd_execute(std::vector<std::string> &commands, Response &out) {
     if (commands.size() == 2 && commands[0] == "get") {
         return do_get(commands, out);
