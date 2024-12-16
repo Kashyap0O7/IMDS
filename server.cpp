@@ -12,7 +12,9 @@
 #include <netinet/ip.h>
 #include <string>
 #include <vector>
-#include <map>
+#include "hashtable.hpp"
+
+#define container_of(ptr, T, member) ((T *)( (char *)ptr - offsetof(T, member) ))
 
 static void message(const char *message) {
     fprintf(stderr, "%s\n", message);
@@ -34,7 +36,9 @@ static void listen_set_nb(int fd) {
         die("fcntl error");
         return;
     }
+
     mark |= O_NONBLOCK;
+
     errno = 0;
     (void)fcntl(fd, F_SETFL, mark);
     if (errno) {
@@ -74,7 +78,9 @@ static Conn *handle_new_conn(int fd) {
         ip & 255, (ip >> 8) & 255, (ip >> 16) & 255, ip >> 24,
         ntohs(client_addr.sin_port)
     );
+
     listen_set_nb(connfd);
+
     Conn *conn = new Conn();
     conn->fd = connfd;
     conn->want_read = true;
@@ -110,6 +116,7 @@ static int32_t deserialize(const uint8_t *data, size_t size, std::vector<std::st
     if (nstr > k_max_args) {
         return -1;
     }
+
     while (out.size() < nstr) {
         uint32_t len = 0;
         if (!read_int(data, end, len)) {
@@ -137,34 +144,80 @@ struct Response {
     std::vector<uint8_t> data;
 };
 
-static std::map<std::string, std::string> storage;
+static struct {
+    HMap db;
+} data_store;
+
+struct Entry {
+    struct HNode node;
+    std::string key;
+    std::string val;
+};
+
+static bool entry_eq(HNode *lhs, HNode *rhs) {
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
+    return le->key == re->key;
+}
+
+static uint64_t str_hash(const uint8_t *data, size_t len) {
+    uint32_t h = 0x811C9DC5;
+    for (size_t i = 0; i < len; i++) {
+        h = (h + data[i]) * 0x01000193;
+    }
+    return h;
+}
+
+static void do_get(std::vector<std::string> &commands, Response &out) {
+    Entry key;
+    key.key.swap(commands[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+    HNode *node = hm_lookup(&data_store.db, &key.node, &entry_eq);
+    if (!node) {
+        out.status = RESP_NX;
+        return;
+    }
+    const std::string &val = container_of(node, Entry, node)->val;
+    assert(val.size() <= k_max_message);
+    out.data.assign(val.begin(), val.end());
+}
+
+static void do_set(std::vector<std::string> &commands, Response &) {
+    Entry key;
+    key.key.swap(commands[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+    HNode *node = hm_lookup(&data_store.db, &key.node, &entry_eq);
+    if (node) {
+        container_of(node, Entry, node)->val.swap(commands[2]);
+    } else {
+        Entry *ent = new Entry();
+        ent->key.swap(key.key);
+        ent->node.hcode = key.node.hcode;
+        ent->val.swap(commands[2]);
+        hm_insert(&data_store.db, &ent->node);
+    }
+}
 
 static void cmd_execute(std::vector<std::string> &commands, Response &out) {
     if (commands.size() == 2 && commands[0] == "get") {
-        auto it = storage.find(commands[1]);
-        if (it == storage.end()) {
-            out.status = RESP_NX;
-            return;
-        }
-        const std::string &val = it->second;
-        out.data.assign(val.begin(), val.end());
+        return do_get(commands, out);
     } else if (commands.size() == 3 && commands[0] == "set") {
-        storage[commands[1]].swap(commands[2]);
+        return do_set(commands, out);
     } else if (commands.size() == 2 && commands[0] == "del") {
-        storage.erase(commands[1]);
+        return do_del(commands, out);
     } else {
         out.status = RESP_ERR;
     }
 }
 
-static void gen_resp(const Response &resp, std::vector<uint8_t> &out) {
+static void make_response(const Response &resp, std::vector<uint8_t> &out) {
     uint32_t resp_len = 4 + (uint32_t)resp.data.size();
-    buf_push_back(out,(const uint8_t *)&resp_len, 4);
-    buf_push_back(out,(const uint8_t *)&resp.status, 4);
-    buf_push_back(out,resp.data.data(), resp.data.size());
+    buf_push_back(out, (const uint8_t *)&resp_len, 4);
+    buf_push_back(out, (const uint8_t *)&resp.status, 4);
+    buf_push_back(out, resp.data.data(), resp.data.size());
 }
 
-static bool pipeline_request(Conn *conn) {
+static bool handle_single_request(Conn *conn) {
     if (conn->incoming.size() < 4) {
         return false;
     }
@@ -179,6 +232,7 @@ static bool pipeline_request(Conn *conn) {
         return false;
     }
     const uint8_t *request = &conn->incoming[4];
+
     std::vector<std::string> commands;
     if (deserialize(request, len, commands) < 0) {
         message("bad request");
@@ -187,7 +241,8 @@ static bool pipeline_request(Conn *conn) {
     }
     Response resp;
     cmd_execute(commands, resp);
-    gen_resp(resp, conn->outgoing);
+    make_response(resp, conn->outgoing);
+
     buf_pop_front(conn->incoming, 4 + len);
     return true;
 }
@@ -203,7 +258,6 @@ static void handle_write(Conn *conn) {
         conn->want_close = true;
         return;
     }
-
     buf_pop_front(conn->outgoing, (size_t)rv);
     if (conn->outgoing.size() == 0) {
         conn->want_read = true;
@@ -231,9 +285,10 @@ static void handle_read(Conn *conn) {
         conn->want_close = true;
         return;
     }
-
     buf_push_back(conn->incoming, buf, (size_t)rv);
-    while (pipeline_request(conn)) {}
+
+    while (handle_single_request(conn)) {}
+
     if (conn->outgoing.size() > 0) {
         conn->want_read = false;
         conn->want_write = true;
@@ -246,26 +301,21 @@ int main() {
     if (fd < 0) {
         die("socket()");
     }
-
     int val = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port = ntohs(1234);
     addr.sin_addr.s_addr = ntohl(0);
-
-
     int rv = bind(fd, (const sockaddr *)&addr, sizeof(addr));
     if (rv) {
         die("bind()");
     }
-
     listen_set_nb(fd);
     rv = listen(fd, SOMAXCONN);
     if (rv) {
         die("listen()");
     }
-
 
     std::vector<Conn *> fd2connMap;
     std::vector<struct pollfd> checklist;
@@ -287,7 +337,6 @@ int main() {
             checklist.push_back(tempollfd);
         }
 
-
         int rv = poll(checklist.data(), (nfds_t)checklist.size(), -1);
         if (rv < 0 && errno == EINTR) {
             continue;
@@ -295,7 +344,6 @@ int main() {
         if (rv < 0) {
             die("poll");
         }
-
 
         if (checklist[0].revents) {
             if (Conn *conn = handle_new_conn(fd)) {
@@ -307,12 +355,12 @@ int main() {
             }
         }
 
-        
         for (size_t i = 1; i < checklist.size(); ++i) {
             uint32_t doable = checklist[i].revents;
             if (doable == 0) {
                 continue;
             }
+
             Conn *conn = fd2connMap[checklist[i].fd];
             if (doable & POLLIN) {
                 assert(conn->want_read);
@@ -322,6 +370,7 @@ int main() {
                 assert(conn->want_write);
                 handle_write(conn);
             }
+
             if ((doable & POLLERR) || conn->want_close) {
                 (void)close(conn->fd);
                 fd2connMap[conn->fd] = NULL;
