@@ -38,6 +38,19 @@ static HNode *h_detach(HTab *htab, HNode **from) {
     return node;
 }
 
+
+
+static bool h_foreach(HTab *htab, bool (*f)(HNode *, void *), void *arg) {
+    for (size_t i = 0; htab->mask != 0 && i <= htab->mask; i++) {
+        for (HNode *node = htab->tab[i]; node != NULL; node = node->next) {
+            if (!f(node, arg)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 const size_t k_rehashing_work = 128;
 
 static void hm_help_rehashing(HMap *hmap) {
@@ -108,4 +121,8 @@ void hm_clear(HMap *hmap) {
 
 size_t hm_size(HMap *hmap) {
     return hmap->newer.size + hmap->older.size;
+}
+
+void hm_foreach(HMap *hmap, bool (*f)(HNode *, void *), void *arg) {
+    h_foreach(&hmap->newer, f, arg) && h_foreach(&hmap->older, f, arg);
 }
