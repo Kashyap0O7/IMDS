@@ -204,11 +204,44 @@ static void do_del(std::vector<std::string> &commands, Buffer &out) {
     return out_int(out, node ? 1 : 0);
 }
 
+static bool cb_keys(HNode *node, void *arg) {
+    Buffer &out = *(Buffer *)arg;
+    const std::string &key = container_of(node, Entry, node)->key;
+    out_str(out, key.data(), key.size());
+    return true;
+}
+
+static void do_keys(std::vector<std::string> &, Buffer &out) {
+    out_arr(out, (uint32_t)hm_size(&data_store.db));
+    hm_foreach(&data_store.db, &cb_keys, (void *)&out);
+}
+
 static void cmd_execute(std::vector<std::string> &commands, Buffer &out) {
     if (commands.size() == 2 && commands[0] == "get") return do_get(commands, out);
     else if (commands.size() == 3 && commands[0] == "set") return do_set(commands, out);
     else if (commands.size() == 2 && commands[0] == "del") return do_del(commands, out);
+    else if (commands.size() == 1 && commands[0] == "keys") return do_keys(commands, out);
     else return out_err(out, ERR_UNKNOWN, "unknown command.");
+}
+
+static void response_begin(Buffer &out, size_t *header) {
+    *header = out.size();
+    buf_push_back_u32(out, 0);
+}
+
+static size_t response_size(Buffer &out, size_t header) {
+    return out.size() - header - 4;
+}
+
+static void response_end(Buffer &out, size_t header) {
+    size_t message_size = response_size(out, header);
+    if (message_size > k_max_message) {
+        out.resize(header + 4);
+        out_err(out, ERR_TOO_BIG, "response is too big.");
+        message_size = response_size(out, header);
+    }
+    uint32_t len = (uint32_t)message_size;
+    memcpy(&out[header], &len, 4);
 }
 
 static bool handle_single_request(Conn *conn) {
@@ -228,7 +261,10 @@ static bool handle_single_request(Conn *conn) {
         conn->want_close = true;
         return false;
     }
+    size_t header_pos = 0;
+    response_begin(conn->outgoing, &header_pos);
     cmd_execute(commands, conn->outgoing);
+    response_end(conn->outgoing, header_pos);
     buf_pop_front(conn->incoming, 4 + len);
     return true;
 }
