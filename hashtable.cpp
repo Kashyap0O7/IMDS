@@ -9,15 +9,6 @@ static void h_init(HTab *htab, size_t n) {
     htab->size = 0;
 }
 
-
-static void h_insert(HTab *htab, HNode *node) {
-    size_t pos = node->hashcode & htab->mask;
-    HNode *next = htab->slots[pos];
-    node->next = next;
-    htab->slots[pos] = node;
-    htab->size++;
-}
-
 static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
     if (!htab->slots) {
         return NULL;
@@ -33,6 +24,14 @@ static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
     return NULL;
 }
 
+static void h_insert(HTab *htab, HNode *node) {
+    size_t pos = node->hashcode & htab->mask;
+    HNode *next = htab->slots[pos];
+    node->next = next;
+    htab->slots[pos] = node;
+    htab->size++;
+}
+
 
 static HNode *h_detach(HTab *htab, HNode **from) {
     HNode *node = *from;    
@@ -41,7 +40,27 @@ static HNode *h_detach(HTab *htab, HNode **from) {
     return node;
 }
 
+static bool h_foreach(HTab *htab, bool (*fptr)(HNode *, void *), void *arg) {
+    for (size_t i = 0; htab->mask != 0 && i <= htab->mask; i++) {
+        for (HNode *node = htab->slots[i]; node != NULL; node = node->next) {
+            if (!fptr(node, arg)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 const size_t k_rehashing_work = 256;    
+
+HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *)) {
+    hm_help_rehashing(hmap);
+    HNode **from = h_lookup(&hmap->bigger, key, eq);
+    if (!from) {
+        from = h_lookup(&hmap->smaller, key, eq);
+    }
+    return from ? *from : NULL;
+}
 
 static void hm_help_rehashing(HMap *hmap) {
     size_t nwork = 0;
@@ -71,26 +90,6 @@ static void hm_trigger_rehashing(HMap *hmap) {
     hmap->mig_ptr = 0;
 }
 
-HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *)) {
-    hm_help_rehashing(hmap);
-    HNode **from = h_lookup(&hmap->bigger, key, eq);
-    if (!from) {
-        from = h_lookup(&hmap->smaller, key, eq);
-    }
-    return from ? *from : NULL;
-}
-
-
-static bool h_foreach(HTab *htab, bool (*fptr)(HNode *, void *), void *arg) {
-    for (size_t i = 0; htab->mask != 0 && i <= htab->mask; i++) {
-        for (HNode *node = htab->slots[i]; node != NULL; node = node->next) {
-            if (!fptr(node, arg)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
 
 const size_t k_max_load_factor = 16;
 
